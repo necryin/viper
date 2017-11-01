@@ -162,8 +162,12 @@ type Viper struct {
 	aliases        map[string]string
 	typeByDefValue bool
 
-	onConfigChange func(fsnotify.Event)
+	onConfigChange onConfigChangeFunc
+	onConfigRead OnConfigReadFunc
 }
+
+type onConfigChangeFunc = func(fsnotify.Event)
+type OnConfigReadFunc = func(map[string]interface{}) error
 
 // New returns an initialized Viper instance.
 func New() *Viper {
@@ -232,9 +236,14 @@ var SupportedExts = []string{"json", "toml", "yaml", "yml", "properties", "props
 // SupportedRemoteProviders are universally supported remote providers.
 var SupportedRemoteProviders = []string{"etcd", "consul"}
 
-func OnConfigChange(run func(in fsnotify.Event)) { v.OnConfigChange(run) }
-func (v *Viper) OnConfigChange(run func(in fsnotify.Event)) {
+func OnConfigChange(run onConfigChangeFunc) { v.OnConfigChange(run) }
+func (v *Viper) OnConfigChange(run onConfigChangeFunc) {
 	v.onConfigChange = run
+}
+
+func OnConfigRead(run OnConfigReadFunc) { v.OnConfigRead(run) }
+func (v *Viper) OnConfigRead(run OnConfigReadFunc) {
+	v.onConfigRead = run
 }
 
 func WatchConfig() { v.WatchConfig() }
@@ -264,11 +273,14 @@ func (v *Viper) WatchConfig() {
 					// we only care about the config file
 					if filepath.Clean(event.Name) == configFile {
 						if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
-							err := v.ReadInConfig()
-							if err != nil {
+							if err := v.ReadInConfig(); err != nil {
 								log.Println("error:", err)
+							} else {
+								if v.onConfigChange != nil {
+									pInfo := fmt.Sprintf("provider: fs, path: %s", event.Name)
+									v.onConfigChange(fsnotify.Event{Op: event.Op, Name: pInfo})
+								}
 							}
-							v.onConfigChange(event)
 						}
 					}
 				case err := <-watcher.Errors:
@@ -1124,9 +1136,7 @@ func (v *Viper) ReadInConfig() error {
 		return err
 	}
 
-	config := make(map[string]interface{})
-
-	err = v.unmarshalReader(bytes.NewReader(file), config)
+	config, err := v.readConfig(bytes.NewReader(file))
 	if err != nil {
 		return err
 	}
@@ -1314,11 +1324,11 @@ func (v *Viper) getKeyValueConfig() error {
 	}
 
 	for _, rp := range v.remoteProviders {
-		val, err := v.getRemoteConfig(rp)
+		config, err := v.getRemoteConfig(rp)
 		if err != nil {
 			continue
 		}
-		v.kvstore = val
+		v.kvstore = config
 		return nil
 	}
 	return RemoteConfigError("No Files Found")
@@ -1329,8 +1339,8 @@ func (v *Viper) getRemoteConfig(provider RemoteProvider) (map[string]interface{}
 	if err != nil {
 		return nil, err
 	}
-	err = v.unmarshalReader(reader, v.kvstore)
-	return v.kvstore, err
+
+	return v.readConfig(reader)
 }
 
 // Retrieve the first found remote configuration.
@@ -1338,13 +1348,24 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 	for _, rp := range v.remoteProviders {
 		respc, _ := RemoteConfig.WatchChannel(rp)
 		//Todo: Add quit channel
-		go func(rc <-chan *RemoteResponse) {
+		go func(rc <-chan *RemoteResponse, provider RemoteProvider) {
 			for {
 				b := <-rc
 				reader := bytes.NewReader(b.Value)
-				v.unmarshalReader(reader, v.kvstore)
+				config, err := v.readConfig(reader)
+				if err != nil {
+					continue
+				}
+
+				v.kvstore = config
+
+				if v.onConfigChange != nil {
+
+					pInfo := fmt.Sprintf("provider: %s, path: %s%s", rp.Provider(), rp.Endpoint(), rp.Path())
+					v.onConfigChange(fsnotify.Event{Op: fsnotify.Create, Name: pInfo})
+				}
 			}
-		}(respc)
+		}(respc, rp)
 		return nil
 	}
 	return RemoteConfigError("No Files Found")
@@ -1353,11 +1374,19 @@ func (v *Viper) watchKeyValueConfigOnChannel() error {
 // Retrieve the first found remote configuration.
 func (v *Viper) watchKeyValueConfig() error {
 	for _, rp := range v.remoteProviders {
-		val, err := v.watchRemoteConfig(rp)
+		config, err := v.watchRemoteConfig(rp)
 		if err != nil {
 			continue
 		}
-		v.kvstore = val
+
+		v.kvstore = config
+
+		if v.onConfigChange != nil {
+
+			pInfo := fmt.Sprintf("provider: %s, path: %s%s", rp.Provider(), rp.Endpoint(), rp.Path())
+			v.onConfigChange(fsnotify.Event{Op: fsnotify.Create, Name: pInfo})
+		}
+
 		return nil
 	}
 	return RemoteConfigError("No Files Found")
@@ -1368,8 +1397,25 @@ func (v *Viper) watchRemoteConfig(provider RemoteProvider) (map[string]interface
 	if err != nil {
 		return nil, err
 	}
-	err = v.unmarshalReader(reader, v.kvstore)
-	return v.kvstore, err
+
+	return v.readConfig(reader)
+}
+
+func (v *Viper) readConfig(reader io.Reader) (map[string]interface{}, error) {
+	config := make(map[string]interface{})
+	err := v.unmarshalReader(reader, config)
+	if err != nil {
+
+		return nil ,err
+	}
+
+	if v.onConfigRead != nil {
+		if err := v.onConfigRead(config); err != nil {
+			return nil ,err
+		}
+	}
+
+	return config, err
 }
 
 // AllKeys returns all keys holding a value, regardless of where they are set.
