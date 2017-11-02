@@ -163,11 +163,11 @@ type Viper struct {
 	typeByDefValue bool
 
 	onConfigChange onConfigChangeFunc
-	onConfigRead OnConfigReadFunc
+	onConfigRead   OnConfigReadFunc
 }
 
-type onConfigChangeFunc = func(fsnotify.Event)
-type OnConfigReadFunc = func(map[string]interface{}) error
+type onConfigChangeFunc func(fsnotify.Event)
+type OnConfigReadFunc func(map[string]interface{}) error
 
 // New returns an initialized Viper instance.
 func New() *Viper {
@@ -1406,12 +1406,12 @@ func (v *Viper) readConfig(reader io.Reader) (map[string]interface{}, error) {
 	err := v.unmarshalReader(reader, config)
 	if err != nil {
 
-		return nil ,err
+		return nil, err
 	}
 
 	if v.onConfigRead != nil {
 		if err := v.onConfigRead(config); err != nil {
-			return nil ,err
+			return nil, err
 		}
 	}
 
