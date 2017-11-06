@@ -163,11 +163,11 @@ type Viper struct {
 	typeByDefValue bool
 
 	onConfigChange onConfigChangeFunc
-	onConfigRead   OnConfigReadFunc
+	onConfigRead   onConfigReadFunc
 }
 
 type onConfigChangeFunc func(fsnotify.Event)
-type OnConfigReadFunc func(map[string]interface{}) error
+type onConfigReadFunc func(map[string]interface{}) error
 
 // New returns an initialized Viper instance.
 func New() *Viper {
@@ -241,8 +241,8 @@ func (v *Viper) OnConfigChange(run onConfigChangeFunc) {
 	v.onConfigChange = run
 }
 
-func OnConfigRead(run OnConfigReadFunc) { v.OnConfigRead(run) }
-func (v *Viper) OnConfigRead(run OnConfigReadFunc) {
+func OnConfigRead(run onConfigReadFunc) { v.OnConfigRead(run) }
+func (v *Viper) OnConfigRead(run onConfigReadFunc) {
 	v.onConfigRead = run
 }
 
